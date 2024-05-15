@@ -1,147 +1,442 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment */
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable @typescript-eslint/no-unused-vars */
+import React, { Fragment, useCallback, useEffect, useState } from "react";
+import { providers, utils } from "near-api-js";
+import type {
+  AccountView,
+  CodeResult,
+} from "near-api-js/lib/providers/provider";
+import type {
+  SignedMessage,
+  SignMessageParams,
+  Transaction,
+} from "@near-wallet-selector/core";
+import { verifyFullKeyBelongsToUser } from "@near-wallet-selector/core";
+import { verifySignature } from "@near-wallet-selector/core";
+import BN from "bn.js";
+import "@near-wallet-selector/modal-ui/styles.css";
 
-import './App.css'
-import { providers } from "near-api-js"
-import "regenerator-runtime/runtime"
-import { useState, useEffect } from "react"
-import Big from "big.js"
-import Form from "./components/Form"
-import SignIn from "./components/SignIn"
-import Messages from "./components/Message"
+import type { Account, Message } from "./interfaces";
+import { useWalletSelector } from "./context/WalletSelectorContext";
+import SignIn from "./components/SignIn";
+import Form from "./components/Form";
+import Messages from "./components/Message";
 
-interface CurrentUser {
-  accountId: any
-  balance: string
+type Submitted = SubmitEvent & {
+  target: { elements: { [key: string]: HTMLInputElement } };
+};
+
+const SUGGESTED_DONATION = "0";
+const BOATLOAD_OF_GAS = utils.format.parseNearAmount("0.00000000003")!;
+
+interface GetAccountBalanceProps {
+  provider: providers.Provider;
+  accountId: string;
 }
 
-interface AppProps {
-  currentUser: CurrentUser
-  nearConfig: any
-  selector: any
-}
+const getAccountBalance = async ({
+  provider,
+  accountId,
+}: GetAccountBalanceProps) => {
+  try {
+    const { amount } = await provider.query<AccountView>({
+      request_type: "view_account",
+      finality: "final",
+      account_id: accountId,
+    });
+    const bn = new BN(amount);
+    return { hasBalance: !bn.isZero() };
+  } catch {
+    return { hasBalance: false };
+  }
+};
 
-const SUGGESTED_DONATION = "0"
-const BOATLOAD_OF_GAS = Big(3)
-  .times(10 ** 13)
-  .toFixed()
+const Content: React.FC = () => {
+  const { selector, modal, accounts, accountId } = useWalletSelector();
+  const [account, setAccount] = useState<Account | null>(null);
+  const [messages, setMessages] = useState<Array<Message>>([]);
+  const [loading, setLoading] = useState<boolean>(false);
 
+  const getAccount = useCallback(async (): Promise<Account | null> => {
+    if (!accountId) {
+      return null;
+    }
 
-function App({
-  currentUser,
-  nearConfig,
-  selector,
-}: AppProps) {
-  const [messages, setMessages] = useState<string[]>([])
+    const { network } = selector.options;
+    const provider = new providers.JsonRpcProvider({ url: network.nodeUrl });
 
-  const provider = new providers.JsonRpcProvider({
-    url: selector.network.nodeUrl,
-  })
+    const { hasBalance } = await getAccountBalance({
+      provider,
+      accountId,
+    });
 
+    if (!hasBalance) {
+      window.alert(
+        `Account ID: ${accountId} has not been founded. Please send some NEAR into this account.`
+      );
+      const wallet = await selector.wallet();
+      await wallet.signOut();
+      return null;
+    }
 
-  useEffect(() => {
-    provider
-      .query({
+    return provider
+      .query<AccountView>({
+        request_type: "view_account",
+        finality: "final",
+        account_id: accountId,
+      })
+      .then((data) => ({
+        ...data,
+        account_id: accountId,
+      }));
+  }, [accountId, selector]);
+
+  const getMessages = useCallback(() => {
+    const { network } = selector.options;
+    const provider = new providers.JsonRpcProvider({ url: network.nodeUrl });
+
+    return provider
+      .query<CodeResult>({
         request_type: "call_function",
-        account_id: selector.getContractId(),
+        account_id: 'guest-book.testnet"',
         method_name: "getMessages",
         args_base64: "",
         finality: "optimistic",
       })
-      .then((res) =>
-        //@ts-ignore
-        setMessages(JSON.parse(Buffer.from(res.result).toString()))
-      )
-  }, [])
+      .then((res) => JSON.parse(Buffer.from(res.result).toString()));
+  }, [selector]);
 
-  const onSubmit = (e: any) => {
-    e.preventDefault()
+  useEffect(() => {
+    // TODO: don't just fetch once; subscribe!
+    getMessages().then(setMessages);
 
-    const { fieldset, message, donation } = e.target.elements
+    const timeoutId = setTimeout(() => {
+      verifyMessageBrowserWallet();
+    }, 500);
 
-    fieldset.disabled = true
+    return () => {
+      clearTimeout(timeoutId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    // TODO: optimistically update page with new message,
-    // update blockchain data in background
-    // add uuid to each message, so we know which one is already known
+  useEffect(() => {
+    if (!accountId) {
+      return setAccount(null);
+    }
 
-    selector
-      .signAndSendTransaction({
-        //@ts-ignore
-        signerId: window.accountId,
-        actions: [
-          {
-            type: "FunctionCall",
-            params: {
-              methodName: "add_message",
-              args: {
-                text: message.value,
+    setLoading(true);
+
+    getAccount().then((nextAccount) => {
+      setAccount(nextAccount);
+      setLoading(false);
+    });
+  }, [accountId, getAccount]);
+
+  const handleSignIn = () => {
+    modal.show();
+  };
+
+  const handleSignOut = async () => {
+    const wallet = await selector.wallet();
+
+    wallet.signOut().catch((err) => {
+      console.log("Failed to sign out");
+      console.error(err);
+    });
+  };
+
+  const handleSwitchWallet = () => {
+    modal.show();
+  };
+
+  const handleSwitchAccount = () => {
+    const currentIndex = accounts.findIndex((x) => x.accountId === accountId);
+    const nextIndex = currentIndex < accounts.length - 1 ? currentIndex + 1 : 0;
+
+    const nextAccountId = accounts[nextIndex].accountId;
+
+    selector.setActiveAccount(nextAccountId);
+
+    alert("Switched account to " + nextAccountId);
+  };
+
+  const addMessages = useCallback(
+    async (message: string, donation: string, multiple: boolean) => {
+      const { contract } = selector.store.getState();
+      const wallet = await selector.wallet();
+      if (!multiple) {
+        return wallet
+          .signAndSendTransaction({
+            signerId: accountId!,
+            actions: [
+              {
+                type: "FunctionCall",
+                params: {
+                  methodName: "addMessage",
+                  args: { text: message },
+                  gas: BOATLOAD_OF_GAS,
+                  deposit: utils.format.parseNearAmount(donation)!,
+                },
               },
-              //@ts-ignore
-              gas: BOATLOAD_OF_GAS,
-              deposit: Big(donation.value || "0")
-                .times(10 ** 24)
-                .toFixed(),
+            ],
+          })
+          .catch((err) => {
+            alert("Failed to add message");
+            console.log("Failed to add message");
+
+            throw err;
+          });
+      }
+
+      const transactions: Array<Transaction> = [];
+
+      for (let i = 0; i < 2; i += 1) {
+        transactions.push({
+          signerId: accountId!,
+          receiverId: contract!.contractId,
+          actions: [
+            {
+              type: "FunctionCall",
+              params: {
+                methodName: "addMessage",
+                args: {
+                  text: `${message} (${i + 1}/2)`,
+                },
+                gas: BOATLOAD_OF_GAS,
+                deposit: utils.format.parseNearAmount(donation)!,
+              },
             },
-          },
-        ],
-      })
-      .catch((err: unknown) => {
-        alert("Something went wrong")
-        throw err
-      })
-      .then(() => {
-        provider
-          .query({
-            request_type: "call_function",
-            account_id: selector.getContractId(),
-            method_name: "getMessages",
-            args_base64: "",
-            finality: "optimistic",
-          })
-          .then((res) => {
-            // @ts-ignore
-            setMessages(JSON.parse(Buffer.from(res.result).toString()))
-            message.value = ""
-            donation.value = SUGGESTED_DONATION
-            fieldset.disabled = false
-            message.focus()
-          })
-      })
+          ],
+        });
+      }
+
+      return wallet.signAndSendTransactions({ transactions }).catch((err) => {
+        alert("Failed to add messages exception " + err);
+        console.log("Failed to add messages");
+
+        throw err;
+      });
+    },
+    [selector, accountId]
+  );
+
+  const handleVerifyOwner = async () => {
+    const wallet = await selector.wallet();
+    try {
+      const owner = await wallet.verifyOwner({
+        message: "test message for verification",
+      });
+
+      if (owner) {
+        alert(`Signature for verification: ${JSON.stringify(owner)}`);
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Something went wrong";
+      alert(message);
+    }
+  };
+
+  const verifyMessage = async (
+    message: SignMessageParams,
+    signedMessage: SignedMessage
+  ) => {
+    const verifiedSignature = verifySignature({
+      message: message.message,
+      nonce: message.nonce,
+      recipient: message.recipient,
+      publicKey: signedMessage.publicKey,
+      signature: signedMessage.signature,
+      callbackUrl: message.callbackUrl,
+    });
+    const verifiedFullKeyBelongsToUser = await verifyFullKeyBelongsToUser({
+      publicKey: signedMessage.publicKey,
+      accountId: signedMessage.accountId,
+      network: selector.options.network,
+    });
+
+    const isMessageVerified = verifiedFullKeyBelongsToUser && verifiedSignature;
+
+    const alertMessage = isMessageVerified
+      ? "Successfully verified"
+      : "Failed to verify";
+
+    alert(
+      `${alertMessage} signed message: '${
+        message.message
+      }': \n ${JSON.stringify(signedMessage)}`
+    );
+  };
+
+  const verifyMessageBrowserWallet = useCallback(async () => {
+    const urlParams = new URLSearchParams(
+      window.location.hash.substring(1) // skip the first char (#)
+    );
+    const accId = urlParams.get("accountId") as string;
+    const publicKey = urlParams.get("publicKey") as string;
+    const signature = urlParams.get("signature") as string;
+
+    if (!accId && !publicKey && !signature) {
+      return;
+    }
+
+    const message: SignMessageParams = JSON.parse(
+      localStorage.getItem("message")!
+    );
+
+    const signedMessage = {
+      accountId: accId,
+      publicKey,
+      signature,
+    };
+
+    await verifyMessage(message, signedMessage);
+
+    const url = new URL(location.href);
+    url.hash = "";
+    url.search = "";
+    window.history.replaceState({}, document.title, url);
+    localStorage.removeItem("message");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSubmit = useCallback(
+    async (e: Submitted) => {
+      e.preventDefault();
+
+      const { fieldset, message, donation, multiple } = e.target.elements;
+
+      fieldset.disabled = true;
+
+      return addMessages(message.value, donation.value || "0", multiple.checked)
+        .then(() => {
+          return getMessages()
+            .then((nextMessages) => {
+              setMessages(nextMessages);
+              message.value = "";
+              donation.value = SUGGESTED_DONATION;
+              fieldset.disabled = false;
+              multiple.checked = false;
+              message.focus();
+            })
+            .catch((err) => {
+              alert("Failed to refresh messages");
+              console.log("Failed to refresh messages");
+
+              throw err;
+            });
+        })
+        .catch((err) => {
+          console.error(err);
+
+          fieldset.disabled = false;
+        });
+    },
+    [addMessages, getMessages]
+  );
+
+  const handleSignMessage = async () => {
+    const wallet = await selector.wallet();
+
+    const message = "test message to sign";
+    const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(32)));
+    const recipient = "guest-book.testnet";
+
+    if (wallet.type === "browser") {
+      localStorage.setItem(
+        "message",
+        JSON.stringify({
+          message,
+          nonce: [...nonce],
+          recipient,
+          callbackUrl: location.href,
+        })
+      );
+    }
+
+    try {
+      const signedMessage = await wallet.signMessage({
+        message,
+        nonce,
+        recipient,
+      });
+      if (signedMessage) {
+        await verifyMessage({ message, nonce, recipient }, signedMessage);
+      }
+    } catch (err) {
+      const errMsg =
+        err instanceof Error ? err.message : "Something went wrong";
+      alert(errMsg);
+    }
+  };
+
+  if (loading) {
+    return null;
   }
 
-  const signIn = () => {
-    console.log("clicked")
-    selector.show()
+  if (!account) {
+    return (
+      <Fragment>
+        <SignIn onClick={handleSignIn} />
+      </Fragment>
+    );
   }
-
-  const signOut = () => {
-    selector.signOut()
-  }
-
 
   return (
-    <main>
-      {currentUser ? (
-        <button className="user__btn" onClick={signOut}>
-          Log out
+    <Fragment>
+      <header className="flex items-center justify-between px-4 py-3 md:px-6 border rounded-lg">
+        <div className="w-[150px]">
+          <a className="flex items-center" href="#">
+            <div className="text-lg font-bold bold"> Near Guest</div>
+            <span className="sr-only">Near Guest</span>
+          </a>
+        </div>
+        <button
+          onClick={handleSignOut}
+          className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            className="mr-2 h-4 w-4"
+          >
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+            <polyline points="16 17 21 12 16 7"></polyline>
+            <line x1="21" x2="9" y1="12" y2="12"></line>
+          </svg>
+          Logout
         </button>
-      ) : (
-        <button className="user__btn" onClick={signIn}>
-          Log in
-        </button>
-      )}
-      <h1>NEAR Guest Book</h1>
-      {currentUser ? (
-        //@ts-ignore
-        <Form onSubmit={onSubmit} currentUser={currentUser} />
-      ) : (
-        <SignIn onClick={signIn} />
-      )}
-      {!!currentUser && !!messages.length && <Messages messages={messages} />}
-    </main>
-  )
-}
+      </header>
+      <main className="flex flex-1 items-center justify-center py-6 md:py-12">
+        <div className="space-y-2 text-center">
+          <h1 className="text-3xl font-bold tracking-tighter md:text-4xl">
+            Welcome back!
+          </h1>
+        </div>
+      </main>
+      <div className="flex m-4 p-4 justify-evenly ">
+        <button onClick={handleSignOut}>Log out</button>
+        <button onClick={handleSwitchWallet}>Switch Wallet</button>
+        <button onClick={handleVerifyOwner}>Verify Owner</button>
+        <button onClick={handleSignMessage}>Sign Message</button>
+        {accounts.length > 1 && (
+          <button onClick={handleSwitchAccount}>Switch Account</button>
+        )}
+      </div>
+      <Form
+        account={account}
+        onSubmit={(e) => handleSubmit(e as unknown as Submitted)}
+      />
+      <Messages messages={messages} />
+    </Fragment>
+  );
+};
 
-export default App
+export default Content;

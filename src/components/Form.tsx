@@ -1,54 +1,46 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment */
-import React from "react"
-import Big from "big.js"
+import type { FormEventHandler } from "react";
+import React from "react";
+import Big from "big.js";
 
-interface User {
-  accountId: string
-  balance: string
-}
+import type { Account } from "../interfaces";
 
 interface FormProps {
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
-  currentUser: User
+  account: Account;
+  onSubmit: FormEventHandler;
 }
 
-export default function Form({
-  onSubmit,
-  currentUser,
-}: FormProps): JSX.Element {
+const Form: React.FC<FormProps> = ({ account, onSubmit }) => {
   return (
     <form onSubmit={onSubmit}>
       <fieldset id="fieldset">
-        <p>Sign the guest book, {currentUser.accountId}!</p>
+        <p>Sign the guest book, {account.account_id}!</p>
         <p className="highlight">
-          <label htmlFor="message">
-            <h3>Message:</h3>
-          </label>
+          <label htmlFor="message">Message:</label>
           <input autoComplete="off" autoFocus id="message" required />
         </p>
         <p>
-          <label htmlFor="donation">
-            <h3>Donation (optional):</h3>
-          </label>
+          <label htmlFor="donation">Donation (optional):</label>
           <input
             autoComplete="off"
             defaultValue={"0"}
             id="donation"
-            // @ts-ignore
-            max={Big(currentUser.balance).div(10 ** 24)}
+            max={Big(account.amount)
+              .div(10 ** 24)
+              .toString()}
             min="0"
             step="0.01"
             type="number"
           />
           <span title="NEAR Tokens">Ⓝ</span>
         </p>
-        <button
-          style={{ backgroundColor: "aliceblue", color: "black" }}
-          type="submit"
-        >
-          Sign
-        </button>
+        <p>
+          <label htmlFor="multiple">Multiple Transactions:</label>
+          <input id="multiple" type="checkbox" />
+        </p>
+        <button type="submit">Sign</button>
       </fieldset>
     </form>
-  )
-}
+  );
+};
+
+export default Form;
