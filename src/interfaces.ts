@@ -1,9 +1,9 @@
 import type { AccountView } from "near-api-js/lib/providers/provider";
 
 export interface Message {
-  premium: boolean;
-  sender: string;
-  text: string;
+  id: string;
+  premium_attached: string;
+  message: string;
 }
 
 export type Account = AccountView & {
