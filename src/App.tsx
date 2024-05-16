@@ -51,7 +51,7 @@ const getAccountBalance = async ({
 }
 
 const Content: React.FC = () => {
-  const { selector, modal, accounts, accountId } = useWalletSelector()
+  const { selector, modal, accountId } = useWalletSelector()
   const [account, setAccount] = useState<Account | null>(null)
   const [messages, setMessages] = useState<Array<Message>>([])
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -167,20 +167,7 @@ const Content: React.FC = () => {
     })
   }
 
-  const handleSwitchWallet = () => {
-    modal.show()
-  }
 
-  const handleSwitchAccount = () => {
-    const currentIndex = accounts.findIndex((x) => x.accountId === accountId)
-    const nextIndex = currentIndex < accounts.length - 1 ? currentIndex + 1 : 0
-
-    const nextAccountId = accounts[nextIndex].accountId
-
-    selector.setActiveAccount(nextAccountId)
-
-    alert("Switched account to " + nextAccountId)
-  }
 
   const addMessages = useCallback(
     async (message: string, donation: string, multiple: boolean) => {
@@ -196,7 +183,7 @@ const Content: React.FC = () => {
                 type: "FunctionCall",
                 params: {
                   methodName: "add_message",
-                  args: { text: message },
+                  args: { message: message },
                   gas: BOATLOAD_OF_GAS,
                   deposit: utils.format.parseNearAmount(donation)!,
                 },
@@ -243,22 +230,6 @@ const Content: React.FC = () => {
     [selector, accountId]
   )
 
-  const handleVerifyOwner = async () => {
-    const wallet = await selector.wallet()
-    try {
-      const owner = await wallet.verifyOwner({
-        message: "test message for verification",
-      })
-
-      if (owner) {
-        alert(`Signature for verification: ${JSON.stringify(owner)}`)
-      }
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Something went wrong"
-      alert(message)
-    }
-  }
 
   const verifyMessage = async (
     message: SignMessageParams,
@@ -358,39 +329,6 @@ const Content: React.FC = () => {
     [addMessages, getMessages]
   )
 
-  const handleSignMessage = async () => {
-    const wallet = await selector.wallet()
-
-    const message = "test message to sign"
-    const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(32)))
-    const recipient = process.env.CONTRACT_NAME as string
-
-    if (wallet.type === "browser") {
-      localStorage.setItem(
-        "message",
-        JSON.stringify({
-          message,
-          nonce: [...nonce],
-          recipient,
-          callbackUrl: location.href,
-        })
-      )
-    }
-
-    try {
-      const signedMessage = await wallet.signMessage({
-        message,
-        nonce,
-        recipient,
-      })
-      if (signedMessage) {
-        await verifyMessage({ message, nonce, recipient }, signedMessage)
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : "Something went wrong"
-      alert(errMsg)
-    }
-  }
 
   if (loading) {
     return null
